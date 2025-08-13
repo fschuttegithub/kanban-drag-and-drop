@@ -1,0 +1,7 @@
+/* Board scaffolding */
+.kbn-board { display: flex; gap: 16px; align-items: flex-start; overflow-x: auto; }
+.kbn-lane { background: #f6f7f9; border-radius: 8px; padding: 8px; min-height: 80px; }
+.kbn-lane-title { font-weight: 600; padding: 4px 8px; }
+.kbn-lane-cards { display: flex; flex-direction: column; gap: 8px; }
+.kbn-card { background: #fff; border: 1px solid #e3e6ea; border-radius: 6px; padding: 8px 10px; box-shadow: 0 1px 0 rgba(0,0,0,0.03); }
+.kbn-card--dragging { box-shadow: 0 6px 12px rgba(0,0,0,0.15); }
