@@ -13,8 +13,25 @@ export function KanbanDragAndDrop(props) {
 
   const lanes = useMemo(() => {
     const items = props.lanes?.items ?? [];
-    return items.map((l, index) => ({ id: String(l.id), index }));
-  }, [props.lanes?.items]);
+    // Get sort key for each lane
+    const lanesWithSort = items.map((l, index) => {
+      let raw = props.laneSortKeyAttr?.get?.(l)?.value;
+      let sortKey =
+        typeof raw === "number" ? raw :
+        typeof raw === "string" ? parseFloat(raw) || 0 :
+        raw && raw.toNumber ? raw.toNumber() : 0;
+      return {
+        id: String(l.id),
+        index,
+        sortKey,
+        lane: l
+      };
+    });
+    // Sort by sortKey ascending
+    lanesWithSort.sort((a, b) => (a.sortKey ?? 0) - (b.sortKey ?? 0));
+    // Return the sorted lane objects (preserving id and index for Board)
+    return lanesWithSort.map(({ id, index }) => ({ id, index }));
+  }, [props.lanes?.items, props.laneSortKeyAttr]);
 
   const derivedCardsByLane = useMemo(() => {
     const out = {};

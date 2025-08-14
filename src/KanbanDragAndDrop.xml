@@ -30,6 +30,14 @@
                     <attributeType name="String" />
                 </attributeTypes>
             </property>
+            <property key="laneSortKeyAttr" type="attribute" dataSource="lanes" required="true">
+                <caption>Lane sort key</caption>
+                <description>Attribute used to determine the order of the lanes.</description>
+                <attributeTypes>
+                    <attributeType name="Decimal" />
+                    <attributeType name="String" />
+                </attributeTypes>
+            </property>
         </propertyGroup>
         <propertyGroup caption="Card mapping">
             <property key="cardTitleAttr" type="attribute" dataSource="cards" required="true">
