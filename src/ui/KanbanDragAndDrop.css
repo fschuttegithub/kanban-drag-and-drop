@@ -8,10 +8,9 @@
 }
 
 .kbn-lane {
-  background: #f6f7f9;
+  background: #d4d4d4;
   border-radius: 8px;
   padding: 8px;
-  min-height: 80px;
   /* Do NOT set overflow here! */
   flex: 0 0 var(--lane-width, 300px);
   display: flex;
@@ -27,9 +26,9 @@
   display: flex;
   flex-direction: column;
   gap: 8px;
-  /* Optional: vertical scroll for cards, set a max-height as needed */
-  overflow-y: auto;
-  max-height: 60vh;
+  min-height: 1px;
+
+
 }
 
 .kbn-card {
@@ -47,4 +46,14 @@
 .kbn-card--dragging {
   box-shadow: 0 6px 12px rgba(0,0,0,0.15);
 
+}
+
+/* Bottom sheet (per-lane) */
+.kbn-lane-bottom {
+  display: block;
+  /* base bottom sheet styling; no top-margin by default */
+}
+
+.kbn-lane-bottom.kbn-lane-bottom--with-cards {
+  margin-top: 8px;
 }
