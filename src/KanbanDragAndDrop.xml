@@ -1,73 +1,90 @@
-<?xml version="1.0" encoding="utf-8"?>
-<widget id="kobeon.kanbandraganddrop.KanbanDragAndDrop" pluginWidget="true" needsEntityContext="true" offlineCapable="true"
-        supportedPlatform="Web"
-        xmlns="http://www.mendix.com/widget/1.0/" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
-        xsi:schemaLocation="http://www.mendix.com/widget/1.0/ ../node_modules/mendix/custom_widget.xsd">
+<?xml version="1.0" encoding="utf-8" ?>
+<widget
+    id="kobeon.kanbandraganddrop.KanbanDragAndDrop"
+    pluginWidget="true"
+    needsEntityContext="true"
+    offlineCapable="true"
+    supportedPlatform="Web"
+    xmlns="http://www.mendix.com/widget/1.0/"
+    xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+    xsi:schemaLocation="http://www.mendix.com/widget/1.0/ ../node_modules/mendix/custom_widget.xsd">
     <name>Kanban Drag And Drop</name>
     <description>My widget description</description>
-    <icon/>
+    <icon />
     <properties>
-    <propertyGroup caption="Data sources">
-      <!-- Lanes datasource (list) -->
-      <property key="lanes" type="datasource" isList="true" required="true">
-        <caption>Lanes</caption>
-        <description>List of Lane objects (constrained to the current Board).</description>
-      </property>
+        <propertyGroup caption="Data sources">
+            <property key="lanes" type="datasource" isList="true" required="true">
+                <caption>Lanes</caption>
+                <description>List of Lane objects.</description>
+            </property>
+            <property key="cards" type="datasource" isList="true" required="true">
+                <caption>Cards</caption>
+                <description>List of Card objects.</description>
+            </property>
+        </propertyGroup>
+        <propertyGroup caption="Lane mapping">
+            <property key="laneTitleAttr" type="attribute" dataSource="lanes" required="true">
+                <caption>Lane title</caption>
+                <description>Attribute used as the lane title.</description>
+                <attributeTypes>
+                    <attributeType name="String" />
+                </attributeTypes>
+            </property>
+        </propertyGroup>
+        <propertyGroup caption="Card mapping">
+            <property key="cardTitleAttr" type="attribute" dataSource="cards" required="true">
+                <caption>Card title</caption>
+                <description>Attribute used as the card title.</description>
+                <attributeTypes>
+                    <attributeType name="String" />
+                </attributeTypes>
+            </property>
 
-      <!-- Cards datasource (list) -->
-      <property key="cards" type="datasource" isList="true" required="true">
-        <caption>Cards</caption>
-        <description>List of Card objects (constrained to the current Board or lane).</description>
-      </property>
-    </propertyGroup>
-
-    <propertyGroup caption="Card mapping">
-      <!-- Card title (String) -->
-      <property key="cardTitleAttr" type="attribute" dataSource="cards" required="true">
-        <caption>Card title attribute</caption>
-        <description>Attribute on Card used as the title.</description>
-        <attributeTypes>
-          <attributeType name="String"/>
-        </attributeTypes>
-      </property>
-
-      <!-- Card sort key (Decimal or String) -->
-      <property key="cardSortKeyAttr" type="attribute" dataSource="cards" required="true">
-        <caption>Card sort key</caption>
-        <description>Attribute used for fractional ordering inside a lane.</description>
-        <attributeTypes>
-          <attributeType name="Decimal"/>
-          <attributeType name="String"/>
-        </attributeTypes>
-      </property>
-
-      <!-- Card -> Lane association -->
-      <property key="cardLaneRef" type="association" dataSource="cards" required="true" selectableObjects="lanes">
-        <caption>Card → Lane reference</caption>
-        <description>Association from Card to Lane.</description>
-        <associationTypes>
-          <associationType name="Reference"/>
-        </associationTypes>
-      </property>
-    </propertyGroup>
-
-    <propertyGroup caption="Behaviors">
-      <!-- Called for the moved Card (ListActionValue because dataSource is set) -->
-      <property key="onCardMove" type="action" dataSource="cards" required="false">
-        <caption>On card move</caption>
-        <description>Execute after dropping a card (use to persist lane + sort order).</description>
-      </property>
-    </propertyGroup>
-
-    <propertyGroup caption="Appearance">
-      <property key="laneWidth" type="integer" defaultValue="320">
-        <caption>Lane width (px)</caption>
-        <description>Base width of a lane column.</description>
-      </property>
-      <property key="compactCards" type="boolean" defaultValue="true">
-        <caption>Compact cards</caption>
-        <description>Toggle condensed card padding.</description>
-      </property>
-    </propertyGroup>
+            <property key="cardSortKeyAttr" type="attribute" dataSource="cards" required="true">
+                <caption>Card sort key</caption>
+                <description>Attribute used for ordering within a lane.</description>
+                <attributeTypes>
+                    <attributeType name="Decimal" />
+                    <attributeType name="String" />
+                </attributeTypes>
+            </property>
+            <property key="cardLaneRef" type="association" dataSource="cards" required="true" selectableObjects="lanes">
+                <caption>Card → Lane</caption>
+                <description>Reference from Card to Lane.</description>
+                <associationTypes>
+                    <associationType name="Reference" />
+                </associationTypes>
+            </property>
+        </propertyGroup>
+        <propertyGroup caption="Move context">
+            <property key="moveTargetLaneGuid" type="attribute" required="true">
+                <caption>Target lane GUID</caption>
+                <description>String attribute on NP context to receive the target lane GUID.</description>
+                <attributeTypes>
+                    <attributeType name="String" />
+                </attributeTypes>
+            </property>
+            <property key="moveNewSortKey" type="attribute" required="true">
+                <caption>New sort key</caption>
+                <description>Decimal attribute on NP context to receive the computed sort key.</description>
+                <attributeTypes>
+                    <attributeType name="Decimal" />
+                </attributeTypes>
+            </property>
+            <property key="onPersist" type="action" dataSource="cards" required="true">
+                <caption>On persist (Card context)</caption>
+                <description>Flow that updates Card → Lane and SortKey, then commits.</description>
+            </property>
+        </propertyGroup>
+        <propertyGroup caption="Display">
+            <property key="laneWidth" type="integer" defaultValue="300">
+                <caption>Lane width (px)</caption>
+                <description>Width of each lane in pixels.</description>
+            </property>
+            <property key="compactCards" type="boolean" defaultValue="false">
+                <caption>Compact cards</caption>
+                <description>Use compact card styling.</description>
+            </property>
+        </propertyGroup>
     </properties>
 </widget>
