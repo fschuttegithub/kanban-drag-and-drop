@@ -1,196 +1,183 @@
-import React, { createElement, useCallback, useMemo, useState, useRef, useEffect } from "react";
-import Big from "big.js";
+import React, { createElement, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Board } from "./components/Board";
+import Big from "big.js";
 import "./ui/KanbanDragAndDrop.css";
-import { fractionalBetween } from "./utils/fractionalIndex";
+
 
 export function KanbanDragAndDrop(props) {
   const lanesReady = props.lanes?.status === "available";
   const cardsReady = props.cards?.status === "available";
-  if (!lanesReady || !cardsReady || !props.cardSortKeyAttr || !props.cardLaneRef) {
+  if (!lanesReady || !cardsReady) {
     return <div className="kbn-board">Loading…</div>;
   }
+  // Ensure all required props are provided
+  const missingProps = [];
+  if (!props.cardSortKeyAttr) missingProps.push("cardSortKeyAttr");
+  if (!props.cardLaneRef) missingProps.push("cardLaneRef");
+  if (!props.laneGuidAttr) missingProps.push("laneGuidAttr");
+  if (!props.moveTargetLaneGuid) missingProps.push("moveTargetLaneGuid");
+  if (!props.moveNewSortKey) missingProps.push("moveNewSortKey");
+  if (!props.onPersist) missingProps.push("onPersist");
+  if (missingProps.length > 0) {
+    console.error(`KanbanDragAndDrop: Missing required properties: ${missingProps.join(", ")}`);
+    return <div className="kbn-board">Configuration incomplete</div>;
+  }
 
-  // Lanes
+  // ---------- helpers ----------
+  const toNumber = v => {
+    if (typeof v === "number") return v;
+    if (typeof v === "string") {
+      const n = parseFloat(v);
+      return Number.isFinite(n) ? n : 0;
+    }
+    if (v && typeof v === "object" && typeof v.toNumber === "function") return v.toNumber();
+    if (v && typeof v === "object" && typeof v.toString === "function") {
+      const n = parseFloat(v.toString());
+      return Number.isFinite(n) ? n : 0;
+    }
+    return 0;
+  };
+
+  const getLaneIdFromCard = c => {
+    const laneRef = props.cardLaneRef.get(c);
+    // Try canonical id first, then .value.id, then .value (if holds id), then string/number
+    if (laneRef && (typeof laneRef.id === "string" || typeof laneRef.id === "number")) return String(laneRef.id);
+    const v = laneRef?.value;
+    if (v && typeof v === "object" && "id" in v) return String(v.id);
+    if (typeof v === "string" || typeof v === "number") return String(v);
+    return null;
+  };
+
+  // ---------- lanes ----------
   const lanes = useMemo(() => {
     const items = props.lanes?.items ?? [];
-    const lanesWithSort = items.map((l, index) => {
+    const arr = items.map((l, index) => {
       const raw = props.laneSortKeyAttr?.get?.(l)?.value;
-      const sortKey =
-        typeof raw === "number" ? raw :
-        typeof raw === "string" ? parseFloat(raw) || 0 :
-        raw && raw.toNumber ? raw.toNumber() : 0;
-      return { id: String(l.id), index, sortKey, title: "Lane", mxObj: l };
+      const sortKey = toNumber(raw);
+      return { id: String(l.id), index, sortKey, mxObj: l };
     });
-    lanesWithSort.sort((a, b) => (a.sortKey ?? 0) - (b.sortKey ?? 0));
-    return lanesWithSort.map(({ id, index, title, mxObj }) => ({ id, index, title, mxObj }));
+    arr.sort((a, b) => (a.sortKey ?? 0) - (b.sortKey ?? 0) || String(a.id).localeCompare(String(b.id)));
+    return arr.map(({ id, index, sortKey, mxObj }) => ({ id, index, sortKey, mxObj }));
   }, [props.lanes?.items, props.laneSortKeyAttr]);
 
   const laneIdSet = useMemo(() => new Set(lanes.map(l => l.id)), [lanes]);
 
-  // Cards → grouped by lane (derived from datasource)
+  // ---------- server-derived cards by lane (normalize to 0..n-1 positions) ----------
   const derivedCardsByLane = useMemo(() => {
-    const out = {};
+    const bucket = {};
     const items = props.cards?.items ?? [];
     for (const c of items) {
-      const raw = props.cardSortKeyAttr.get(c)?.value;
-      const sortKey =
-        typeof raw === "number" ? raw :
-        typeof raw === "string" ? parseFloat(raw) || 0 :
-        raw && raw.toNumber ? raw.toNumber() : 0;
-
-      const laneRef = props.cardLaneRef.get(c);
-      const v = laneRef?.value;
-      const laneId =
-        typeof laneRef?.id === "string" || typeof laneRef?.id === "number" ? String(laneRef.id) :
-        v && typeof v === "object" && "id" in v ? String(v.id) :
-        typeof v === "string" || typeof v === "number" ? String(v) : null;
-
+      const laneId = getLaneIdFromCard(c);
       if (!laneId) continue;
-      (out[laneId] ||= []).push({ id: String(c.id), sortKey, mxObj: c });
+      const raw = props.cardSortKeyAttr.get(c)?.value;
+      const sortKey = toNumber(raw);
+      (bucket[laneId] ||= []).push({ id: String(c.id), sortRaw: sortKey, mxObj: c });
     }
-    Object.keys(out).forEach(k => out[k].sort((a, b) => (a.sortKey ?? 0) - (b.sortKey ?? 0)));
+    // sort by raw then reindex to 0..n-1 so visual order is integer-based
+    const out = {};
+    for (const [k, arr] of Object.entries(bucket)) {
+      arr.sort((a, b) => (a.sortRaw ?? 0) - (b.sortRaw ?? 0) || String(a.id).localeCompare(String(b.id)));
+      out[k] = arr.map((x, idx) => ({ id: x.id, sortKey: idx, mxObj: x.mxObj }));
+    }
     return out;
   }, [props.cards?.items, props.cardSortKeyAttr, props.cardLaneRef]);
 
-  // UI state (optimistic)
+  // ---------- optimistic view state & pending overlay ----------
   const [viewCardsByLane, setViewCardsByLane] = useState(derivedCardsByLane);
 
-  // Subscriptions
-  const pendingGuidRef = useRef(null);
-  const moveSubRef = useRef(null);
-  const entitySubRef = useRef(null);
+  // Map<cardId, { toLane: string, sortKey: number }>
+  const pendingMovesRef = useRef(new Map());
 
-  // Mirror server when idle
+  // Rebuild the view when server data changes.
   useEffect(() => {
-    if (!pendingGuidRef.current) setViewCardsByLane(derivedCardsByLane);
-  }, [derivedCardsByLane]);
-
-  // Cleanup
-  useEffect(() => {
-    return () => {
-      if (moveSubRef.current) window.mx.data.unsubscribe(moveSubRef.current);
-      if (entitySubRef.current) window.mx.data.unsubscribe(entitySubRef.current);
-    };
-  }, []);
-
-  // Upsert/remove helpers
-  const upsertCardIntoState = useCallback(
-    (guid, laneId, sortKey, mxObj) => {
-      const laneKey = String(laneId);
-      if (!laneKey || !laneIdSet.has(laneKey)) return;
-
-      setViewCardsByLane(prev => {
-        const next = {};
-        for (const [k, v] of Object.entries(prev)) next[k] = v.slice();
-
-        // remove if exists (move/update)
-        for (const k of Object.keys(next)) {
-          const idx = next[k].findIndex(c => c.id === String(guid));
-          if (idx >= 0) next[k].splice(idx, 1);
+    // First, clear any pending entries that the server has already applied.
+    if (pendingMovesRef.current.size > 0) {
+      const items = props.cards?.items ?? [];
+      const byId = new Map(items.map(c => [String(c.id), c]));
+      for (const [cardId, { toLane, sortKey }] of Array.from(pendingMovesRef.current.entries())) {
+        const c = byId.get(cardId);
+        if (!c) continue;
+        const laneId = getLaneIdFromCard(c);
+        const currentRaw = toNumber(props.cardSortKeyAttr.get(c)?.value);
+        // server raw might not be normalized; treat equality if lane matches AND raw equals target index
+        if (laneId === toLane && currentRaw === sortKey) {
+          pendingMovesRef.current.delete(cardId);
         }
-
-        // ensure lane array exists, then insert sorted
-        const list = (next[laneKey] ||= []);
-        const entry = { id: String(guid), sortKey, mxObj };
-        let i = list.findIndex(c => (c.sortKey ?? 0) > (sortKey ?? 0));
-        if (i === -1) i = list.length;
-        list.splice(i, 0, entry);
-
-        return next;
-      });
-    },
-    [laneIdSet]
-  );
-
-  const removeCardFromState = useCallback(guid => {
-    setViewCardsByLane(prev => {
-      const next = {};
-      let changed = false;
-      for (const [k, v] of Object.entries(prev)) {
-        const arr = v.slice();
-        const idx = arr.findIndex(c => c.id === String(guid));
-        if (idx >= 0) { arr.splice(idx, 1); changed = true; }
-        next[k] = arr;
       }
-      return changed ? next : prev;
-    });
-  }, []);
-
-  // Entity subscription: create/update/delete
-  useEffect(() => {
-    const entityName = props.cards?.items?.[0]?.getEntity?.();
-    if (!entityName) return;
-
-    if (entitySubRef.current) {
-      window.mx.data.unsubscribe(entitySubRef.current);
-      entitySubRef.current = null;
     }
 
-    entitySubRef.current = window.mx.data.subscribe({
-      entity: entityName,
-      callback: changedGuid => {
-        // If a guid is provided → upsert/remove just that one
-        if (changedGuid) {
-          if (pendingGuidRef.current && String(changedGuid) === String(pendingGuidRef.current)) {
-            return; // let the per-object subscription finalize the move
-          }
-          window.mx.data.get({
-            guid: String(changedGuid),
-            callback: obj => {
-              if (!obj) { removeCardFromState(changedGuid); return; }
-              const laneId = obj.get(props.cardLaneRef.id);
-              const sortRaw = obj.get(props.cardSortKeyAttr.id);
-              const sortKey =
-                typeof sortRaw === "number" ? sortRaw :
-                typeof sortRaw === "string" ? parseFloat(sortRaw) || 0 :
-                sortRaw && sortRaw.toNumber ? sortRaw.toNumber() : 0;
-              upsertCardIntoState(changedGuid, laneId, sortKey, obj);
-            }
-          });
-          return;
-        }
+    // If nothing pending, mirror server; otherwise overlay pending moves on top.
+    if (pendingMovesRef.current.size === 0) {
+      setViewCardsByLane(derivedCardsByLane);
+    } else {
+      setViewCardsByLane(applyPendingOverlay(derivedCardsByLane, pendingMovesRef.current));
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [derivedCardsByLane, props.cards?.items]);
 
-        // Fallback: some entity-level callbacks don't pass a guid.
-        // Trigger a datasource reload so derivedCardsByLane updates,
-        // which will refresh empty lanes as well.
-        props.cards?.reload?.();
-      }
-    });
+  const applyPendingOverlay = (base, pendingMap) => {
+    // clone base shallowly
+    const out = {};
+    for (const [k, v] of Object.entries(base)) out[k] = v.slice();
 
-    return () => {
-      if (entitySubRef.current) {
-        window.mx.data.unsubscribe(entitySubRef.current);
-        entitySubRef.current = null;
+    // Build server byId map to retrieve mxObj reliably
+    const allItems = props.cards?.items ?? [];
+    const byId = new Map(allItems.map(c => [String(c.id), c]));
+
+    // Remove card wherever it currently sits
+    const removeCardFromAll = cardId => {
+      for (const arr of Object.values(out)) {
+        const idx = arr.findIndex(x => x.id === cardId);
+        if (idx >= 0) arr.splice(idx, 1);
       }
     };
-  }, [props.cards?.items, props.cardLaneRef, props.cardSortKeyAttr, upsertCardIntoState, removeCardFromState]);
 
-  // Drag & drop persistence
-  const applyLocalMove = (state, fromLane, toLane, fromIdx, toIdx, cardId, newKeyNum) => {
+    for (const [cardId, { toLane, sortKey }] of pendingMap.entries()) {
+      removeCardFromAll(cardId);
+      if (!laneIdSet.has(toLane)) continue;
+
+      const dst = out[toLane] || (out[toLane] = []);
+
+      // Insert at desired index (sortKey is the target index)
+      const insertIdx = Math.min(Math.max(sortKey, 0), dst.length);
+      const mxObj = byId.get(cardId); // use server object; safe for cardContent.get(...)
+
+      dst.splice(insertIdx, 0, { id: cardId, sortKey: insertIdx, mxObj });
+
+      // Reindex to keep sortKey == visual index
+      for (let i = 0; i < dst.length; i++) dst[i].sortKey = i;
+    }
+    return out;
+  };
+
+  // ---------- helpers for local moves ----------
+  const applyLocalMove = (state, fromLane, toLane, fromIdx, toIdx, cardId) => {
     const next = {};
     for (const [k, v] of Object.entries(state)) next[k] = v.slice();
     const src = next[fromLane] ?? [];
-    const dst = fromLane === toLane ? src : (next[toLane] ?? []);
+    const dst = fromLane === toLane ? src : (next[toLane] ?? (next[toLane] = []));
+
+    // Remove moving item
     let moving;
     if (fromLane === toLane) moving = dst.splice(fromIdx, 1)[0];
     else moving = src.splice(fromIdx, 1)[0];
     if (!moving) return state;
-    dst.splice(toIdx, 0, { ...moving, id: cardId, sortKey: newKeyNum });
+
+    // Clamp destination index and insert
+    const clamped = Math.min(Math.max(toIdx, 0), dst.length);
+    const updated = { ...moving, id: cardId };
+    dst.splice(clamped, 0, updated);
+
+    // Reindex both lanes so sortKey equals visual index
+    for (let i = 0; i < src.length; i++) src[i].sortKey = i;
+    for (let i = 0; i < dst.length; i++) dst[i].sortKey = i;
+
     next[fromLane] = src;
     next[toLane] = dst;
     return next;
   };
 
-  const clearPending = () => {
-    pendingGuidRef.current = null;
-    if (moveSubRef.current) {
-      window.mx.data.unsubscribe(moveSubRef.current);
-      moveSubRef.current = null;
-    }
-    setViewCardsByLane(derivedCardsByLane);
-  };
-
+  // ---------- drag & drop persistence ----------
   const onCardMove = useCallback(
     result => {
       const { draggableId, source, destination } = result ?? {};
@@ -201,72 +188,46 @@ export function KanbanDragAndDrop(props) {
       const fromIdx = source.index;
       const toIdx = destination.index;
 
-      const dst = (viewCardsByLane[toLane] ?? []).map(x => ({ ...x }));
-      const src = fromLane === toLane ? dst : (viewCardsByLane[fromLane] ?? []).map(x => ({ ...x }));
+      if (!laneIdSet.has(fromLane) || !laneIdSet.has(toLane)) return;
 
-      let moving;
-      if (fromLane === toLane) moving = dst[fromIdx];
-      else moving = src[fromIdx];
-      if (!moving) return;
+      // NewSortKey is the visual target index (0-based)
+      const newIndex = toIdx;
 
-      const left = toIdx - 1 >= 0 ? dst[toIdx - 1]?.sortKey ?? null : null;
-      const right = toIdx + 1 < dst.length ? dst[toIdx + 1]?.sortKey ?? null : null;
+      // Optimistic local move
+      setViewCardsByLane(prev => applyLocalMove(prev, fromLane, toLane, fromIdx, newIndex, String(draggableId)));
 
-      const between = fractionalBetween(left, right);
-      const newKeyBig = between && between.toNumber ? between : new Big(between ?? 0);
-      const newKeyNum = newKeyBig.toNumber();
+      // Record as pending so re-renders won't snap back while microflow runs
+      pendingMovesRef.current.set(String(draggableId), { toLane, sortKey: newIndex });
 
-      setViewCardsByLane(prev =>
-        applyLocalMove(prev, fromLane, toLane, fromIdx, toIdx, String(draggableId), newKeyNum)
-      );
-      pendingGuidRef.current = String(draggableId);
-
+      // Prepare and run persist action
       const cardItem = (props.cards?.items ?? []).find(i => String(i.id) === String(draggableId));
       if (!cardItem) return;
 
       const laneObj = (props.lanes?.items ?? []).find(l => String(l.id) === toLane);
       const laneGuidValue = props.laneGuidAttr?.get?.(laneObj)?.value;
-      props.moveTargetLaneGuid.setValue(laneGuidValue);
-      props.moveNewSortKey.setValue(newKeyBig);
-      props.onPersist?.get?.(cardItem)?.execute?.();
 
-      if (moveSubRef.current) window.mx.data.unsubscribe(moveSubRef.current);
-      moveSubRef.current = window.mx.data.subscribe({
-        guid: String(draggableId),
-        callback: () => {
-          window.mx.data.get({
-            guid: String(draggableId),
-            callback: obj => {
-              if (!obj) return;
-              const laneGuid = obj.get(props.cardLaneRef.id);
-              const sortKeyRaw = obj.get(props.cardSortKeyAttr.id);
-              let sortKey;
-              if (typeof sortKeyRaw === "number") sortKey = sortKeyRaw;
-              else if (typeof sortKeyRaw === "string") sortKey = parseFloat(sortKeyRaw) || 0;
-              else if (sortKeyRaw && sortKeyRaw.toNumber) sortKey = sortKeyRaw.toNumber();
-              else sortKey = 0;
+      props.moveTargetLaneGuid?.setValue?.(laneGuidValue);
+      props.moveNewSortKey?.setValue?.(new Big(newIndex)); // integer 0..n-1
+      const persistAction = props.onPersist?.get?.(cardItem);
+      if (persistAction?.canExecute) {
+        persistAction.execute();
+      }
 
-              if (laneGuid === toLane && Math.abs(sortKey - newKeyNum) < 1e-6) {
-                clearPending();
-              }
-            }
-          });
-        }
-      });
+      // Refresh datasource; overlay prevents visual snap-back.
+      props.cards?.reload?.();
     },
     [
-      viewCardsByLane,
+      laneIdSet,
       props.cards?.items,
       props.lanes?.items,
       props.laneGuidAttr,
       props.moveTargetLaneGuid,
       props.moveNewSortKey,
-      props.onPersist,
-      props.cardLaneRef,
-      props.cardSortKeyAttr
+      props.onPersist
     ]
   );
 
+  // Render Board with provided templates and layout props
   return (
     <Board
       lanes={lanes}
